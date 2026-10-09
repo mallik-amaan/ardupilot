@@ -19,6 +19,7 @@ bool Plane::auto_takeoff_check(void)
     if (!arming.is_armed_and_safety_off()) {
         memset(&takeoff_state, 0, sizeof(takeoff_state));
         auto_state.baro_takeoff_alt = barometer.get_altitude();
+        launch_sm.reset();
         return false;
     }
 
@@ -305,6 +306,10 @@ int16_t Plane::get_takeoff_pitch_min_cd(void)
         return auto_state.takeoff_pitch_cd;
     }
 
+    if (g2.launch_pitch_enable && !launch_sm.is_pitch_reached()) {
+        return auto_state.takeoff_pitch_cd;
+    }
+
     int32_t relative_alt_cm = adjusted_relative_altitude_cm();
     int32_t remaining_height_to_target_cm = (auto_state.takeoff_altitude_rel_cm - relative_alt_cm);
 
@@ -422,4 +427,127 @@ bool Plane::check_takeoff_timeout_level_off(void)
         }
     }
     return false;
+}
+
+/*
+  LaunchStateMachine implementation
+*/
+void Plane::LaunchStateMachine::reset()
+{
+    state = State::IDLE;
+    stability_start_ms = 0;
+    last_debug_ms = 0;
+    timer_active = false;
+    latched = false;
+}
+
+void Plane::LaunchStateMachine::start()
+{
+    state = State::LAUNCH_TAKEOFF;
+    stability_start_ms = 0;
+    last_debug_ms = 0;
+    timer_active = false;
+    latched = false;
+}
+
+bool Plane::LaunchStateMachine::update()
+{
+    if (!plane.g2.launch_pitch_enable) {
+        return false;
+    }
+    if (latched) {
+        return true;
+    }
+
+    const uint32_t now_ms = AP_HAL::millis();
+
+    if (state == State::IDLE || state == State::LAUNCH_TAKEOFF) {
+        if (plane.is_flying()) {
+            state = State::PITCH_ACQUISITION;
+            float target_pitch_deg = plane.auto_state.takeoff_pitch_cd > 0 ? (plane.auto_state.takeoff_pitch_cd * 0.01f) : plane.g2.launch_pitch.get();
+            plane.gcs().send_text(MAV_SEVERITY_INFO, "Launch: Airborne, acquiring pitch %.1f deg",
+                                  (double)target_pitch_deg);
+        } else {
+            return false;
+        }
+    }
+
+    if (state == State::PITCH_ACQUISITION) {
+        const float actual_pitch_deg = plane.ahrs.pitch_sensor * 0.01f;
+        float desired_pitch_deg = plane.g2.launch_pitch.get();
+        if (plane.auto_state.takeoff_pitch_cd > 0) {
+            desired_pitch_deg = plane.auto_state.takeoff_pitch_cd * 0.01f;
+        }
+        const float tol_deg = fabsf(plane.g2.launch_pitch_tol.get());
+        const float pitch_err_deg = fabsf(actual_pitch_deg - desired_pitch_deg);
+        const bool inside_tol = (pitch_err_deg <= tol_deg);
+        const uint32_t required_ms = (uint32_t)(MAX(0.0f, plane.g2.launch_pitch_time.get()) * 1000.0f);
+
+        if (inside_tol) {
+            if (!timer_active) {
+                timer_active = true;
+                stability_start_ms = now_ms;
+            }
+            if ((now_ms - stability_start_ms) >= required_ms) {
+                state = State::PITCH_REACHED;
+                latched = true;
+                plane.gcs().send_text(MAV_SEVERITY_NOTICE, "Launch: PITCH_REACHED! (act=%.1f des=%.1f stable=%ums)",
+                                      (double)actual_pitch_deg, (double)desired_pitch_deg, (unsigned)required_ms);
+                return true;
+            }
+        } else {
+            timer_active = false;
+            stability_start_ms = 0;
+        }
+
+        // Rate-limited debug reporting (1 Hz)
+        if (now_ms - last_debug_ms >= 1000) {
+            last_debug_ms = now_ms;
+            plane.gcs().send_text(MAV_SEVERITY_DEBUG, "Launch: des=%.1f act=%.1f tol=%.1f in=%s time=%u/%ums reached=NO",
+                                  (double)desired_pitch_deg, (double)actual_pitch_deg, (double)tol_deg,
+                                  inside_tol ? "YES" : "NO",
+                                  (unsigned)(inside_tol ? (now_ms - stability_start_ms) : 0),
+                                  (unsigned)required_ms);
+        }
+    }
+
+    return false;
+}
+
+void Plane::LaunchStateMachine::update_wp_navigation(float wp_dist_m, int32_t current_alt_cm, int32_t wp_alt_cm)
+{
+    if (!plane.g2.launch_pitch_enable) {
+        return;
+    }
+    if (state < State::TRANSIT_TO_WP || state == State::NORMAL_NAVIGATION) {
+        return;
+    }
+
+    const uint32_t now_ms = AP_HAL::millis();
+    const float conv_dist_m = plane.g2.wp_conv_dist.get();
+    const float conv_tol_m = plane.g2.wp_conv_tol.get();
+    const float alt_error_m = fabsf((current_alt_cm - wp_alt_cm) * 0.01f);
+
+    if (state == State::TRANSIT_TO_WP) {
+        if (wp_dist_m <= conv_dist_m) {
+            state = State::ALT_CONVERGENCE;
+            plane.gcs().send_text(MAV_SEVERITY_INFO, "WP_CONV: Entering convergence zone (dist=%.1fm <= %.1fm, alt_err=%.1fm)",
+                                  (double)wp_dist_m, (double)conv_dist_m, (double)alt_error_m);
+        }
+    }
+
+    if (state == State::ALT_CONVERGENCE) {
+        if (alt_error_m <= conv_tol_m) {
+            state = State::ALT_HOLD;
+            plane.gcs().send_text(MAV_SEVERITY_NOTICE, "WP_CONV: Alt captured (err=%.1fm <= %.1fm) -> HOLDING ALT",
+                                  (double)alt_error_m, (double)conv_tol_m);
+        } else {
+            // Rate-limited debug reporting (1 Hz) during convergence
+            if (now_ms - last_debug_ms >= 1000) {
+                last_debug_ms = now_ms;
+                plane.gcs().send_text(MAV_SEVERITY_DEBUG, "WP_CONV: dist=%.1fm alt_err=%.1fm target=%.1fm",
+                                      (double)wp_dist_m, (double)alt_error_m, (double)(wp_alt_cm * 0.01f));
+            }
+        }
+    }
 }

@@ -64,6 +64,10 @@ bool ModeTakeoff::_enter()
 {
     takeoff_mode_setup = false;
     have_autoenabled_fences = false;
+    plane.launch_sm.reset();
+    if (plane.g2.launch_pitch_enable) {
+        plane.launch_sm.start();
+    }
 
     return true;
 }
@@ -159,19 +163,27 @@ void ModeTakeoff::update()
         plane.steer_state.hold_course_cd = wrap_360_cd(direction*100); // Necessary to allow Plane::takeoff_calc_roll() to function.
     }
         
-    // We finish the initial level takeoff if we climb past
-    // TKOFF_ALT or we pass the target location. The check for
-    // target location prevents us flying forever if we can't climb.
-    if (plane.flight_stage == AP_FixedWing::FlightStage::TAKEOFF &&
-        (altitude_cm >= (alt*100 - 200) ||
-        start_loc.get_distance(plane.current_loc) >= dist)) {
-        plane.set_flight_stage(AP_FixedWing::FlightStage::NORMAL);
-    }
+    if (plane.g2.launch_pitch_enable) {
+        plane.launch_sm.update();
+        if (plane.flight_stage == AP_FixedWing::FlightStage::TAKEOFF && plane.launch_sm.is_pitch_reached()) {
+            plane.set_flight_stage(AP_FixedWing::FlightStage::NORMAL);
+            plane.launch_sm.set_normal_nav();
+        }
+    } else {
+        // We finish the initial level takeoff if we climb past
+        // TKOFF_ALT or we pass the target location. The check for
+        // target location prevents us flying forever if we can't climb.
+        if (plane.flight_stage == AP_FixedWing::FlightStage::TAKEOFF &&
+            (altitude_cm >= (alt*100 - 200) ||
+            start_loc.get_distance(plane.current_loc) >= dist)) {
+            plane.set_flight_stage(AP_FixedWing::FlightStage::NORMAL);
+        }
 
-    // If we have timed-out on the attempt to close the final few meters
-    // during pitch level-off, continue to NORMAL flight stage.
-    if (plane.check_takeoff_timeout_level_off()) {
-        plane.set_flight_stage(AP_FixedWing::FlightStage::NORMAL);
+        // If we have timed-out on the attempt to close the final few meters
+        // during pitch level-off, continue to NORMAL flight stage.
+        if (plane.check_takeoff_timeout_level_off()) {
+            plane.set_flight_stage(AP_FixedWing::FlightStage::NORMAL);
+        }
     }
 
     if (plane.flight_stage == AP_FixedWing::FlightStage::TAKEOFF) {

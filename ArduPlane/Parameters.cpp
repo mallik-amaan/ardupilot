@@ -1298,6 +1298,53 @@ const AP_Param::GroupInfo ParametersG2::var_info[] = {
     AP_GROUPINFO("RNGFND_LND_DIST", 41, ParametersG2, rangefinder_land_engage_dist_m, 0),
 #endif
 
+    // @Param: LAUNCH_PITCH_EN
+    // @DisplayName: Launch pitch state machine enable
+    // @Description: Enable pitch-based acceptance condition for launch/takeoff. When enabled, takeoff completes only when actual pitch remains within tolerance of desired pitch for the configured stability time.
+    // @Values: 0:Disabled,1:Enabled
+    // @User: Standard
+    AP_GROUPINFO("LAUNCH_PITCH_EN", 42, ParametersG2, launch_pitch_enable, 0),
+
+    // @Param: LAUNCH_PITCH
+    // @DisplayName: Launch desired pitch angle
+    // @Description: Desired pitch angle for takeoff acceptance condition.
+    // @Range: -45 85
+    // @Units: deg
+    // @User: Standard
+    AP_GROUPINFO("LAUNCH_PITCH", 43, ParametersG2, launch_pitch, 15.0f),
+
+    // @Param: LAUNCH_PITCH_TOL
+    // @DisplayName: Launch pitch tolerance
+    // @Description: Acceptance tolerance around desired pitch angle.
+    // @Range: 0.1 15.0
+    // @Units: deg
+    // @User: Standard
+    AP_GROUPINFO("LAUNCH_PITCH_TOL", 44, ParametersG2, launch_pitch_tol, 2.0f),
+
+    // @Param: LAUNCH_PITCH_SEC
+    // @DisplayName: Launch pitch stability time
+    // @Description: Time actual pitch must continuously remain within tolerance before takeoff is considered complete.
+    // @Range: 0.0 30.0
+    // @Units: s
+    // @User: Standard
+    AP_GROUPINFO("LAUNCH_PITCH_SEC", 45, ParametersG2, launch_pitch_time, 3.0f),
+
+    // @Param: WP_CONV_DIST
+    // @DisplayName: Waypoint convergence distance
+    // @Description: Horizontal distance to target waypoint at which vertical altitude convergence initiates.
+    // @Range: 10.0 2000.0
+    // @Units: m
+    // @User: Standard
+    AP_GROUPINFO("WP_CONV_DIST", 46, ParametersG2, wp_conv_dist, 150.0f),
+
+    // @Param: WP_CONV_TOL
+    // @DisplayName: Waypoint altitude convergence tolerance
+    // @Description: Vertical altitude error threshold to capture and hold waypoint altitude.
+    // @Range: 0.5 10.0
+    // @Units: m
+    // @User: Standard
+    AP_GROUPINFO("WP_CONV_TOL", 47, ParametersG2, wp_conv_tol, 2.0f),
+
     AP_GROUPEND
 };
 

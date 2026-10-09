@@ -594,6 +594,14 @@ public:
 #if AP_PLANE_SYSTEMID_ENABLED
     AP_SystemID systemid;
 #endif
+
+    // Configurable pitch acceptance condition for launch/takeoff
+    AP_Int8         launch_pitch_enable;
+    AP_Float        launch_pitch;
+    AP_Float        launch_pitch_tol;
+    AP_Float        launch_pitch_time;
+    AP_Float        wp_conv_dist;
+    AP_Float        wp_conv_tol;
 };
 
 extern const AP_Param::Info var_info[];

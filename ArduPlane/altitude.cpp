@@ -77,6 +77,10 @@ void Plane::setup_alt_slope(void)
         break;
 
     case Mode::Number::AUTO:
+        if (g2.launch_pitch_enable && (launch_sm.is_in_alt_convergence() || launch_sm.is_in_alt_hold())) {
+            reset_offset_altitude();
+            break;
+        }
         // climb without doing slope if option is enabled
         if (!above_location_current(next_WP_loc) && plane.flight_option_enabled(FlightOptions::IMMEDIATE_CLIMB_IN_AUTO)) {
             reset_offset_altitude();
@@ -304,6 +308,11 @@ void Plane::change_target_altitude(int32_t change_cm)
 void Plane::set_target_altitude_proportion(const Location &loc, float proportion)
 {
     set_target_altitude_location(loc);
+
+    if (g2.launch_pitch_enable && (launch_sm.is_in_alt_convergence() || launch_sm.is_in_alt_hold())) {
+        reset_offset_altitude();
+        return;
+    }
 
     // Only do altitude slope handling when above CLIMB_SLOPE_HGT or when
     // descending. This is meant to prevent situations where the aircraft tries

@@ -3382,6 +3382,11 @@ bool QuadPlane::do_vtol_takeoff(const AP_Mission::Mission_Command& cmd)
         return false;
     }
 
+    plane.launch_sm.reset();
+    if (plane.g2.launch_pitch_enable) {
+        plane.launch_sm.start();
+    }
+
     // we always use the current location in XY for takeoff. The altitude defaults
     // to relative to current height, but if Q_OPTIONS is set to respect takeoff frame
     // then it will use normal frame handling for height

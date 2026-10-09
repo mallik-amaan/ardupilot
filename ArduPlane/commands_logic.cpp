@@ -389,8 +389,19 @@ void Plane::do_takeoff(const AP_Mission::Mission_Command& cmd)
     // pitch in deg, airspeed  m/s, throttle %, track WP 1 or 0
     auto_state.takeoff_pitch_cd        = (int16_t)cmd.p1 * 100;
     if (auto_state.takeoff_pitch_cd <= 0) {
-        // if the mission doesn't specify a pitch use 4 degrees
-        auto_state.takeoff_pitch_cd = 400;
+        if (g2.launch_pitch_enable) {
+            auto_state.takeoff_pitch_cd = (int16_t)(g2.launch_pitch.get() * 100);
+        } else {
+            // if the mission doesn't specify a pitch use 4 degrees
+            auto_state.takeoff_pitch_cd = 400;
+        }
+    } else if (g2.launch_pitch_enable) {
+        g2.launch_pitch.set(cmd.p1);
+    }
+    if (g2.launch_pitch_enable) {
+        launch_sm.start();
+    } else {
+        launch_sm.reset();
     }
     auto_state.takeoff_altitude_rel_cm = next_WP_loc.alt - home.alt;
     next_WP_loc.lat = home.lat + 10;
@@ -611,14 +622,33 @@ bool Plane::verify_takeoff()
         mission.reset();
     }
 
-    // see if we have reached takeoff altitude
     int32_t relative_alt_cm = adjusted_relative_altitude_cm();
-    if (
-        relative_alt_cm > auto_state.takeoff_altitude_rel_cm || // altitude reached
-        plane.check_takeoff_timeout_level_off() // pitch level-off maneuver has timed out
-        ) {
-        gcs().send_text(MAV_SEVERITY_INFO, "Takeoff complete at %.2fm",
-                          (double)(relative_alt_cm*0.01f));
+    bool takeoff_done = false;
+
+    if (g2.launch_pitch_enable) {
+        launch_sm.update();
+        if (launch_sm.is_pitch_reached()) {
+            gcs().send_text(MAV_SEVERITY_INFO, "Takeoff complete via pitch condition at %.2fm",
+                              (double)(relative_alt_cm*0.01f));
+            takeoff_done = true;
+            launch_sm.set_transit_to_wp();
+        } else if (relative_alt_cm > auto_state.takeoff_altitude_rel_cm ||
+                   plane.check_takeoff_timeout_level_off()) {
+            gcs().send_text(MAV_SEVERITY_INFO, "Takeoff complete via alt ceiling at %.2fm",
+                              (double)(relative_alt_cm*0.01f));
+            takeoff_done = true;
+            launch_sm.set_transit_to_wp();
+        }
+    } else {
+        if (relative_alt_cm > auto_state.takeoff_altitude_rel_cm ||
+            plane.check_takeoff_timeout_level_off()) {
+            gcs().send_text(MAV_SEVERITY_INFO, "Takeoff complete at %.2fm",
+                              (double)(relative_alt_cm*0.01f));
+            takeoff_done = true;
+        }
+    }
+
+    if (takeoff_done) {
         steer_state.hold_course_cd = -1;
         auto_state.takeoff_complete = true;
         next_WP_loc = prev_WP_loc = current_loc;
@@ -631,9 +661,9 @@ bool Plane::verify_takeoff()
         // can end up doing too sharp a turn
         auto_state.next_wp_crosstrack = false;
         return true;
-    } else {
-        return false;
     }
+
+    return false;
 }
 
 /*
@@ -643,6 +673,10 @@ bool Plane::verify_takeoff()
 bool Plane::verify_nav_wp(const AP_Mission::Mission_Command& cmd)
 {
     steer_state.hold_course_cd = -1;
+
+    if (g2.launch_pitch_enable) {
+        launch_sm.update_wp_navigation(auto_state.wp_distance, adjusted_altitude_cm(), next_WP_loc.alt);
+    }
 
     // depending on the pass by flag either go to waypoint in regular manner or
     // fly past it for set distance along the line of waypoints
@@ -688,6 +722,9 @@ bool Plane::verify_nav_wp(const AP_Mission::Mission_Command& cmd)
     }
     const float wp_dist = current_loc.get_distance(flex_next_WP_loc);
     if (wp_dist <= acceptance_distance_m) {
+        if (g2.launch_pitch_enable && launch_sm.is_in_alt_hold()) {
+            launch_sm.set_normal_nav();
+        }
         gcs().send_text(MAV_SEVERITY_INFO, "Reached waypoint #%i dist %um",
                           (unsigned)mission.get_current_nav_cmd().index,
                           (unsigned)current_loc.get_distance(flex_next_WP_loc));
@@ -696,6 +733,9 @@ bool Plane::verify_nav_wp(const AP_Mission::Mission_Command& cmd)
 
     // have we flown past the waypoint?
     if (current_loc.past_interval_finish_line(prev_WP_loc, flex_next_WP_loc)) {
+        if (g2.launch_pitch_enable && launch_sm.is_in_alt_hold()) {
+            launch_sm.set_normal_nav();
+        }
         gcs().send_text(MAV_SEVERITY_INFO, "Passed waypoint #%i dist %um",
                           (unsigned)mission.get_current_nav_cmd().index,
                           (unsigned)current_loc.get_distance(flex_next_WP_loc));
