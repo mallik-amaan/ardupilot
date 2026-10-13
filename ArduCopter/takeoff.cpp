@@ -149,7 +149,13 @@ void _AutoTakeoff::run()
         pos_control->D_update_controller();
         attitude_control->reset_yaw_target_and_rate();
         attitude_control->reset_rate_controller_I_terms();
-        attitude_control->input_thrust_vector_rate_heading_rads(pos_control->get_thrust_vector(), 0.0);
+        if (copter.g2.launch_pitch_enable) {
+            // slew yaw toward the launch heading target while still level so
+            // the angled-pitch thrust vector points at the waypoint from liftoff
+            attitude_control->input_thrust_vector_heading(pos_control->get_thrust_vector(), copter.flightmode->auto_yaw.get_heading());
+        } else {
+            attitude_control->input_thrust_vector_rate_heading_rads(pos_control->get_thrust_vector(), 0.0);
+        }
         // update auto_takeoff_no_nav_alt_m
         no_nav_alt_m = pos_control->get_pos_estimate_U_m() + g2.wp_navalt_min_m;
         return;
@@ -165,7 +171,11 @@ void _AutoTakeoff::run()
         pos_control->NE_relax_velocity_controller();
         pos_control->NE_update_controller();
         attitude_control->reset_rate_controller_I_terms();
-        attitude_control->input_thrust_vector_rate_heading_rads(pos_control->get_thrust_vector(), 0.0);
+        if (copter.g2.launch_pitch_enable) {
+            attitude_control->input_thrust_vector_heading(pos_control->get_thrust_vector(), copter.flightmode->auto_yaw.get_heading());
+        } else {
+            attitude_control->input_thrust_vector_rate_heading_rads(pos_control->get_thrust_vector(), 0.0);
+        }
         if (throttle >= MIN(copter.g2.takeoff_throttle_max, 0.9) || 
             (copter.pos_control->get_estimated_accel_U_mss() >= 0.5 * copter.pos_control->D_get_max_accel_mss()) ||
             (copter.pos_control->get_vel_estimate_U_ms() >= 0.1 * copter.pos_control->get_max_speed_up_ms()) || 
@@ -189,7 +199,11 @@ void _AutoTakeoff::run()
     } else {
         Vector2f vel_ne_zero;
         Vector2f accel_ne_zero;
-        pos_control->input_vel_accel_NE_m(vel_ne_zero, accel_ne_zero);
+        if (copter.g2.launch_pitch_enable && !copter.launch_sm.is_pitch_reached()) {
+            pos_control->NE_relax_velocity_controller();
+        } else {
+            pos_control->input_vel_accel_NE_m(vel_ne_zero, accel_ne_zero);
+        }
     }
     pos_control->NE_update_controller();
 
@@ -202,7 +216,13 @@ void _AutoTakeoff::run()
     pos_control->D_update_controller();
 
     // call attitude controller with auto yaw
-    attitude_control->input_thrust_vector_heading(pos_control->get_thrust_vector(), copter.flightmode->auto_yaw.get_heading());
+    if (copter.g2.launch_pitch_enable && !copter.launch_sm.is_pitch_reached()) {
+        const float angle_limit_rad = attitude_control->lean_angle_max_rad();
+        const float target_pitch_rad = constrain_float(radians(copter.g2.launch_pitch.get()), -angle_limit_rad, angle_limit_rad);
+        attitude_control->input_euler_angle_roll_pitch_yaw_rad(0.0f, target_pitch_rad, copter.flightmode->auto_yaw.get_heading().yaw_angle_rad, true);
+    } else {
+        attitude_control->input_thrust_vector_heading(pos_control->get_thrust_vector(), copter.flightmode->auto_yaw.get_heading());
+    }
 
     // takeoff complete when we are less than 1% of the stopping distance from the target altitude
     // and 10% our maximum climb rate
@@ -256,4 +276,127 @@ bool Mode::is_taking_off() const
         return false;
     }
     return takeoff.running();
+}
+
+/*
+  LaunchStateMachine implementation for ArduCopter
+*/
+void Copter::LaunchStateMachine::reset()
+{
+    state = State::IDLE;
+    stability_start_ms = 0;
+    last_debug_ms = 0;
+    timer_active = false;
+    latched = false;
+}
+
+void Copter::LaunchStateMachine::start()
+{
+    state = State::LAUNCH_TAKEOFF;
+    stability_start_ms = 0;
+    last_debug_ms = 0;
+    timer_active = false;
+    latched = false;
+}
+
+bool Copter::LaunchStateMachine::update()
+{
+    if (!copter.g2.launch_pitch_enable) {
+        return false;
+    }
+    if (latched) {
+        return true;
+    }
+
+    const uint32_t now_ms = AP_HAL::millis();
+
+    if (state == State::IDLE || state == State::LAUNCH_TAKEOFF) {
+        if (!copter.ap.land_complete) {
+            state = State::PITCH_ACQUISITION;
+            const float target_pitch_deg = copter.g2.launch_pitch.get();
+            copter.gcs().send_text(MAV_SEVERITY_INFO, "Launch: Airborne, acquiring pitch %.1f deg",
+                                   (double)target_pitch_deg);
+        } else {
+            return false;
+        }
+    }
+
+    if (state == State::PITCH_ACQUISITION) {
+        const float actual_pitch_deg = copter.ahrs.pitch_sensor * 0.01f;
+        const float desired_pitch_deg = copter.g2.launch_pitch.get();
+        const float tol_deg = fabsf(copter.g2.launch_pitch_tol.get());
+        const float pitch_err_deg = fabsf(actual_pitch_deg - desired_pitch_deg);
+        const bool inside_tol = (pitch_err_deg <= tol_deg);
+        const uint32_t required_ms = (uint32_t)(MAX(0.0f, copter.g2.launch_pitch_time.get()) * 1000.0f);
+
+        if (inside_tol) {
+            if (!timer_active) {
+                timer_active = true;
+                stability_start_ms = now_ms;
+            }
+            if ((now_ms - stability_start_ms) >= required_ms) {
+                state = State::PITCH_REACHED;
+                latched = true;
+                copter.gcs().send_text(MAV_SEVERITY_NOTICE, "Launch: PITCH_REACHED! (act=%.1f des=%.1f stable=%ums)",
+                                       (double)actual_pitch_deg, (double)desired_pitch_deg, (unsigned)required_ms);
+                return true;
+            }
+        } else {
+            timer_active = false;
+            stability_start_ms = 0;
+        }
+
+        // Rate-limited debug reporting (1 Hz)
+        if (now_ms - last_debug_ms >= 1000) {
+            last_debug_ms = now_ms;
+            copter.gcs().send_text(MAV_SEVERITY_DEBUG, "Launch: des=%.1f act=%.1f tol=%.1f in=%s time=%u/%ums reached=NO",
+                                   (double)desired_pitch_deg, (double)actual_pitch_deg, (double)tol_deg,
+                                   inside_tol ? "YES" : "NO",
+                                   (unsigned)(inside_tol ? (now_ms - stability_start_ms) : 0),
+                                   (unsigned)required_ms);
+        }
+    }
+
+    return false;
+}
+
+void Copter::LaunchStateMachine::update_wp_navigation(float wp_dist_m, int32_t current_alt_cm, int32_t wp_alt_cm)
+{
+    if (!copter.g2.launch_pitch_enable) {
+        return;
+    }
+    if (state < State::TRANSIT_TO_WP || state == State::NORMAL_NAVIGATION) {
+        return;
+    }
+
+    const uint32_t now_ms = AP_HAL::millis();
+    const float conv_dist_m = copter.g2.wp_conv_dist.get();
+    const float conv_tol_m = copter.g2.wp_conv_tol.get();
+    const float alt_error_m = fabsf((current_alt_cm - wp_alt_cm) * 0.01f);
+
+    if (state == State::TRANSIT_TO_WP) {
+        if (wp_dist_m <= conv_dist_m) {
+            state = State::ALT_CONVERGENCE;
+            copter.gcs().send_text(MAV_SEVERITY_INFO, "WP_CONV: Entering convergence zone (dist=%.1fm <= %.1fm, alt_err=%.1fm)",
+                                   (double)wp_dist_m, (double)conv_dist_m, (double)alt_error_m);
+            // one transition per call so verify_nav_wp re-targets the waypoint
+            // destination before the altitude capture check runs against it
+            return;
+        }
+    }
+
+    if (state == State::ALT_CONVERGENCE) {
+        if (alt_error_m <= conv_tol_m) {
+            state = State::ALT_HOLD;
+            copter.gcs().send_text(MAV_SEVERITY_NOTICE, "WP_CONV: Alt captured (err=%.1fm <= %.1fm) -> HOLDING ALT",
+                                   (double)alt_error_m, (double)conv_tol_m);
+        } else {
+            // Rate-limited debug reporting (1 Hz) during convergence
+            if (now_ms - last_debug_ms >= 1000) {
+                last_debug_ms = now_ms;
+                copter.gcs().send_text(MAV_SEVERITY_DEBUG, "WP_CONV: dist=%.1fm alt_err=%.1fm target=%.1fm",
+                                       (double)wp_dist_m, (double)alt_error_m, (double)(wp_alt_cm * 0.01f));
+            }
+        }
+    }
 }

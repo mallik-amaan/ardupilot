@@ -64,6 +64,8 @@ bool ModeAuto::init(bool ignore_checks)
         copter.precland_statemachine.init();
 #endif
 
+        copter.launch_sm.reset();
+
         return true;
     } else {
         return false;
@@ -1134,12 +1136,31 @@ void ModeAuto::wp_run()
     // run waypoint controller
     copter.failsafe_terrain_set_status(wp_nav->update_wpnav());
 
+    // nose-down launch pitch: thrust tilts forward, so holding the launch pitch
+    // flies the vehicle toward the waypoint (auto_yaw faces it). A positive
+    // launch pitch would push the vehicle away, so fall back to normal wp_nav.
+    const bool launch_transit = copter.g2.launch_pitch_enable &&
+        copter.launch_sm.get_state() == Copter::LaunchStateMachine::State::TRANSIT_TO_WP &&
+        is_negative(copter.g2.launch_pitch.get());
+    if (launch_transit) {
+        // horizontal control is open-loop during the angled-pitch transit; relax
+        // the NE controller so it does not wind up against the commanded attitude
+        pos_control->NE_relax_velocity_controller();
+        pos_control->NE_update_controller();
+    }
+
     // WP_Nav has set the vertical position control targets
     // run the vertical position controller and set output throttle
     pos_control->D_update_controller();
 
     // call attitude controller with auto yaw
-    attitude_control->input_thrust_vector_heading(pos_control->get_thrust_vector(), auto_yaw.get_heading());
+    if (launch_transit) {
+        const float angle_limit_rad = attitude_control->lean_angle_max_rad();
+        const float target_pitch_rad = constrain_float(radians(copter.g2.launch_pitch.get()), -angle_limit_rad, angle_limit_rad);
+        attitude_control->input_euler_angle_roll_pitch_yaw_rad(0.0f, target_pitch_rad, auto_yaw.get_heading().yaw_angle_rad, true);
+    } else {
+        attitude_control->input_thrust_vector_heading(pos_control->get_thrust_vector(), auto_yaw.get_heading());
+    }
 }
 
 // auto_land_run - lands in auto mode
@@ -1542,8 +1563,34 @@ void ModeAuto::subtract_pos_offsets(Location& target_loc) const
 // do_takeoff - initiate takeoff navigation command
 void ModeAuto::do_takeoff(const AP_Mission::Mission_Command& cmd)
 {
+    if (copter.g2.launch_pitch_enable) {
+        // cmd.p1 is stored as uint16; reinterpret as int16 so a negative mission pitch survives
+        const int16_t mission_pitch_deg = int16_t(cmd.p1);
+        if (mission_pitch_deg != 0) {
+            copter.g2.launch_pitch.set(mission_pitch_deg);
+        }
+        copter.launch_sm.start();
+    } else {
+        copter.launch_sm.reset();
+    }
+
     // Set wp navigation target to safe altitude above current position
     takeoff_start(cmd.content.location);
+
+    if (copter.g2.launch_pitch_enable) {
+        // yaw to face the next mission waypoint so the launch pitch thrust
+        // vector points at it regardless of the vehicle's arming heading.
+        // Must run after takeoff_start(), which sets auto_yaw to HOLD.
+        // wp_start() later preserves this FIXED yaw when WP_YAW_BEHAVIOR=0
+        // and otherwise switches to LOOK_AT_NEXT_WP (same heading).
+        AP_Mission::Mission_Command next_cmd;
+        if (mission.get_next_nav_cmd(cmd.index + 1, next_cmd) &&
+            next_cmd.content.location.initialised()) {
+            auto_yaw.set_fixed_yaw_rad(
+                radians(copter.current_loc.get_bearing_to(next_cmd.content.location) * 0.01f),
+                0.0f, 1, false);
+        }
+    }
 }
 
 // get the Location portion of a command.  If the command's lat and lon and/or alt are zero the default_loc's lat,lon and/or alt are returned instead
@@ -1590,8 +1637,23 @@ void ModeAuto::do_nav_wp(const AP_Mission::Mission_Command& cmd)
 
     // get waypoint's location from command and send to wp_nav
     Location target_loc;
-    if (!get_loc_from_cmd(cmd, default_loc, target_loc) || !wp_start(target_loc)) {
-        // failure to get the location or set next destination can only be because of missing terrain data or unhealthy rangefinder
+    if (!get_loc_from_cmd(cmd, default_loc, target_loc)) {
+        // failure to get the location can only be because of missing terrain data or unhealthy rangefinder
+        copter.failsafe_terrain_on_event();
+        return;
+    }
+
+    if (copter.g2.launch_pitch_enable && copter.launch_sm.get_state() == Copter::LaunchStateMachine::State::TRANSIT_TO_WP) {
+        // While in transit, maintain current altitude instead of climbing toward
+        // the WP altitude. Convert the current altitude into the target's altitude
+        // frame so terrain-relative or absolute missions cannot command a bad height.
+        float cur_alt_m;
+        if (copter.current_loc.get_alt_m(target_loc.get_alt_frame(), cur_alt_m)) {
+            target_loc.set_alt_m(cur_alt_m, target_loc.get_alt_frame());
+        }
+    }
+
+    if (!wp_start(target_loc)) {
         copter.failsafe_terrain_on_event();
         return;
     }
@@ -2136,15 +2198,32 @@ void ModeAuto::do_RTL(void)
 // verify_takeoff - check if we have completed the takeoff
 bool ModeAuto::verify_takeoff()
 {
+    bool takeoff_complete = false;
+
+    if (copter.g2.launch_pitch_enable) {
+        copter.launch_sm.update();
+        if (copter.launch_sm.is_pitch_reached()) {
+            copter.launch_sm.set_transit_to_wp();
+            gcs().send_text(MAV_SEVERITY_INFO, "Takeoff complete via pitch condition");
+            takeoff_complete = true;
+        } else if (auto_takeoff.complete) {
+            copter.launch_sm.set_transit_to_wp();
+            gcs().send_text(MAV_SEVERITY_INFO, "Takeoff complete via alt ceiling");
+            takeoff_complete = true;
+        }
+    } else {
+        takeoff_complete = auto_takeoff.complete;
+    }
+
 #if AP_LANDINGGEAR_ENABLED
     // if we have reached our destination
-    if (auto_takeoff.complete) {
+    if (takeoff_complete) {
         // retract the landing gear
         copter.landinggear.retract_after_takeoff();
     }
 #endif
 
-    return auto_takeoff.complete;
+    return takeoff_complete;
 }
 
 // verify_land - returns true if landing has been completed
@@ -2292,9 +2371,47 @@ bool ModeAuto::verify_yaw()
 // verify_nav_wp - check if we have reached the next way point
 bool ModeAuto::verify_nav_wp(const AP_Mission::Mission_Command& cmd)
 {
+    if (copter.g2.launch_pitch_enable) {
+        const float wp_dist = copter.wp_nav->get_wp_distance_to_destination_m();
+
+        // measure the vertical error in a single altitude frame (the wp_nav
+        // destination's frame) so terrain-relative or absolute missions cannot
+        // skew the comparison against current_loc (which is above-home)
+        int32_t cur_alt_cm = copter.current_loc.alt;
+        int32_t wp_alt_cm = cmd.content.location.alt;
+        Location dest_loc;
+        if (copter.wp_nav->get_wp_destination_loc(dest_loc)) {
+            float cur_alt_m;
+            if (copter.current_loc.get_alt_m(dest_loc.get_alt_frame(), cur_alt_m)) {
+                cur_alt_cm = int32_t(cur_alt_m * 100.0f);
+                wp_alt_cm = dest_loc.alt;
+            }
+        }
+
+        const auto prev_state = copter.launch_sm.get_state();
+        copter.launch_sm.update_wp_navigation(wp_dist, cur_alt_cm, wp_alt_cm);
+        const auto curr_state = copter.launch_sm.get_state();
+
+        if (prev_state == Copter::LaunchStateMachine::State::TRANSIT_TO_WP &&
+            curr_state == Copter::LaunchStateMachine::State::ALT_CONVERGENCE) {
+            Location final_loc = cmd.content.location;
+            copter.wp_nav->set_wp_destination_loc(final_loc);
+        }
+    }
+
     // check if we have reached the waypoint
     if ( !copter.wp_nav->reached_wp_destination() ) {
         return false;
+    }
+
+    // while the interceptor sequence is still running, hold horizontal position
+    // at the waypoint until the vertical error has been captured (ALT_HOLD),
+    // then hand control back to normal navigation
+    if (copter.g2.launch_pitch_enable && copter.launch_sm.sequence_active()) {
+        if (!copter.launch_sm.is_in_alt_hold()) {
+            return false;
+        }
+        copter.launch_sm.set_normal_nav();
     }
 
     // start timer if necessary

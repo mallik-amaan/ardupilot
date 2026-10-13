@@ -743,6 +743,15 @@ public:
     void *mode_flip_ptr;
 #endif
 
+//Custom Parameters for the ArduCopter to Interceptor
+        // Launch/takeoff pitch acceptance & convergence parameters
+    AP_Int8         launch_pitch_enable; // LAUNCH_PITCH_EN
+    AP_Float        launch_pitch;        // LAUNCH_PITCH
+    AP_Float        launch_pitch_tol;    // LAUNCH_PITCH_TOL
+    AP_Float        launch_pitch_time;   // LAUNCH_PITCH_SEC
+    AP_Float        wp_conv_dist;        // WP_CONV_DIST
+    AP_Float        wp_conv_tol;         // WP_CONV_TOL
+
 };
 
 extern const AP_Param::Info        var_info[];

@@ -1192,6 +1192,53 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     AP_SUBGROUPPTR(mode_flip_ptr, "FLIP_", 23, ParametersG2, ModeFlip),
 #endif
 
+    // CUSTOM INTERCEPTOR TAKEOFF LOGIC
+    // @Param: LAUNCH_PITCH_EN
+    // @DisplayName: Launch pitch angle hold enable
+    // @Description: Enable pitch hold during takeoff phase
+    // @Values: 0:Disabled,1:Enabled
+    // @User: Standard
+    AP_GROUPINFO("LAUNCH_PITCH_EN", 25, ParametersG2, launch_pitch_enable, 0),
+
+    // @Param: LAUNCH_PITCH
+    // @DisplayName: Target launch pitch angle
+    // @Description: Pitch angle to reach and hold during takeoff (degrees)
+    // @Units: deg
+    // @Range: -45.0 85.0
+    // @User: Standard
+    AP_GROUPINFO("LAUNCH_PITCH", 26, ParametersG2, launch_pitch, 15.0f),
+
+    // @Param: LAUNCH_PITCH_TOL
+    // @DisplayName: Launch pitch tolerance
+    // @Description: Pitch angle tolerance for target pitch acquisition (degrees)
+    // @Units: deg
+    // @Range: 0.1 10.0
+    // @User: Standard
+    AP_GROUPINFO("LAUNCH_PITCH_TOL", 27, ParametersG2, launch_pitch_tol, 2.0f),
+
+    // @Param: LAUNCH_PITCH_SEC
+    // @DisplayName: Launch pitch hold duration
+    // @Description: Duration in seconds to hold target pitch angle once reached
+    // @Units: s
+    // @Range: 0.0 30.0
+    // @User: Standard
+    AP_GROUPINFO("LAUNCH_PITCH_SEC", 28, ParametersG2, launch_pitch_time, 3.0f),
+
+    // @Param: WP_CONV_DIST
+    // @DisplayName: Waypoint convergence trigger distance
+    // @Description: Horizontal distance to waypoint (D) below which vertical descent begins
+    // @Units: m
+    // @Range: 10.0 2000.0
+    // @User: Standard
+    AP_GROUPINFO("WP_CONV_DIST", 29, ParametersG2, wp_conv_dist, 150.0f),
+
+    // @Param: WP_CONV_TOL
+    // @DisplayName: Waypoint altitude convergence tolerance
+    // @Description: Vertical distance threshold to target altitude before holding
+    // @Units: m
+    // @Range: 0.1 10.0
+    // @User: Standard
+    AP_GROUPINFO("WP_CONV_TOL", 30, ParametersG2, wp_conv_tol, 2.0f),
     // ID 62 is reserved for the AP_SUBGROUPEXTENSION
 
     AP_GROUPEND

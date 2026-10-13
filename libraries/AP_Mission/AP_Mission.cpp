@@ -1221,7 +1221,8 @@ MAV_MISSION_RESULT AP_Mission::mavlink_int_to_mission_cmd(const mavlink_mission_
         break;
 
     case MAV_CMD_NAV_TAKEOFF:                           // MAV ID: 22
-        cmd.p1 = packet.param1;                         // minimum pitch (plane only)
+        // minimum pitch; stored as int16 so negative pitches survive the uint16 field
+        cmd.p1 = uint16_t(int16_t(constrain_float(packet.param1, -32767.0f, 32767.0f)));
         break;
 
     case MAV_CMD_NAV_CONTINUE_AND_CHANGE_ALT:           // MAV ID: 30
@@ -1767,7 +1768,7 @@ bool AP_Mission::mission_cmd_to_mavlink_int(const AP_Mission::Mission_Command& c
         break;
 
     case MAV_CMD_NAV_TAKEOFF:                           // MAV ID: 22
-        packet.param1 = cmd.p1;                         // minimum pitch (plane only)
+        packet.param1 = int16_t(cmd.p1);                // minimum pitch (plane only)
         break;
 
     case MAV_CMD_NAV_CONTINUE_AND_CHANGE_ALT:           // MAV ID: 30
