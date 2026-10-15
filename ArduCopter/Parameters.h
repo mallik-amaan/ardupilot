@@ -12,6 +12,9 @@ class ModeRTL;
 #if MODE_FOLLOW_ENABLED
  # include <AP_Follow/AP_Follow.h>
 #endif
+#if FOLLOWER_LAUNCH_ENABLED
+ # include "follower_fsm.h"
+#endif
 #if WEATHERVANE_ENABLED
  #include <AC_AttitudeControl/AC_WeatherVane.h>
 #endif
@@ -608,6 +611,11 @@ public:
 #if MODE_FOLLOW_ENABLED
     // follow
     AP_Follow follow;
+#endif
+
+#if FOLLOWER_LAUNCH_ENABLED
+    // follower launch & engagement state machine (follower_fsm.cpp)
+    FollowerFsm follower_fsm;
 #endif
 
 #if USER_PARAMS_ENABLED

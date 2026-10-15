@@ -477,6 +477,13 @@ MAV_RESULT GCS_MAVLINK_Copter::handle_command_int_packet(const mavlink_command_i
     case MAV_CMD_DO_CHANGE_SPEED:
         return handle_MAV_CMD_DO_CHANGE_SPEED(packet);
 
+#if FOLLOWER_LAUNCH_ENABLED
+    case MAV_CMD_USER_1:
+        // follower engagement requests; see ArduCopter/follower_fsm.h
+        return copter.g2.follower_fsm.handle_user_command(uint8_t(packet.param1), packet.param2, packet.param3) ?
+               MAV_RESULT_ACCEPTED : MAV_RESULT_FAILED;
+#endif
+
     case MAV_CMD_DO_REPOSITION:
         return handle_command_int_do_reposition(packet);
 

@@ -2020,6 +2020,12 @@ public:
     // Return true if this mode is enabled, used by MAVLink available modes
     bool enabled() const override;
 
+#if FOLLOWER_LAUNCH_ENABLED
+    // drive the follower launch/engagement state machine (follower_fsm.cpp);
+    // returns true when the state machine has handled this update cycle
+    bool follower_update();
+#endif
+
 protected:
 
     const char *name() const override { return "Follow"; }

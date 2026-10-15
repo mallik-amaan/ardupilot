@@ -729,6 +729,12 @@ const AP_Param::GroupInfo ParametersG2::var_info[] = {
     AP_SUBGROUPINFO(follow, "FOLL", 27, ParametersG2, AP_Follow),
 #endif
 
+#if FOLLOWER_LAUNCH_ENABLED
+    // @Group: FLWR_
+    // @Path: follower_fsm.cpp
+    AP_SUBGROUPINFO(follower_fsm, "FLWR_", 62, ParametersG2, FollowerFsm),
+#endif
+
 #if USER_PARAMS_ENABLED
     AP_SUBGROUPINFO(user_parameters, "USR", 28, ParametersG2, UserParameters),
 #endif

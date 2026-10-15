@@ -187,6 +187,17 @@
 #endif
 
 //////////////////////////////////////////////////////////////////////////////
+// Follower launch - autonomous interceptor-style launch within Follow mode
+// (follower_fsm.h/.cpp): an armed, landed vehicle in FOLLOW launches toward
+// the target when it comes within FLWR_TRIG_DIST
+#ifndef FOLLOWER_LAUNCH_ENABLED
+#define FOLLOWER_LAUNCH_ENABLED MODE_FOLLOW_ENABLED
+#endif
+#if FOLLOWER_LAUNCH_ENABLED && !MODE_FOLLOW_ENABLED
+#error FOLLOWER_LAUNCH_ENABLED relies on MODE_FOLLOW_ENABLED
+#endif
+
+//////////////////////////////////////////////////////////////////////////////
 // Guided mode - control vehicle's position or angles from GCS
 #ifndef MODE_GUIDED_ENABLED
 # define MODE_GUIDED_ENABLED 1

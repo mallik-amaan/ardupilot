@@ -50,6 +50,12 @@ bool ModeFollow::init(const bool ignore_checks)
     // initialise yaw
     auto_yaw.set_mode_to_default(false);
 
+#if FOLLOWER_LAUNCH_ENABLED
+    // hand control of the engagement to the follower launch/engagement
+    // state machine (follower_fsm.cpp)
+    g2.follower_fsm.enter();
+#endif
+
     return true;
 }
 
@@ -61,6 +67,15 @@ void ModeFollow::exit()
 
 void ModeFollow::run()
 {
+#if FOLLOWER_LAUNCH_ENABLED
+    // the follower launch/engagement state machine (follower_fsm.cpp) may
+    // hold the vehicle on the ground or drive the interceptor launch; it
+    // must run before the disarmed/landed early-return below
+    if (follower_update()) {
+        return;
+    }
+#endif
+
     // if not armed set throttle to zero and exit immediately
     if (is_disarmed_or_landed()) {
         make_safe_ground_handling();

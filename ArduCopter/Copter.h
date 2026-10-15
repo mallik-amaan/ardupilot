@@ -229,6 +229,8 @@ public:
 
     friend class _AutoTakeoff;
 
+    friend class FollowerFsm;
+
     friend class PayloadPlace;
 
     Copter(void);
