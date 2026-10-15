@@ -821,6 +821,11 @@ bool AP_Follow::handle_follow_target_message(const mavlink_message_t &msg)
 // Initializes the positional offsets from the target vehicle if not already set.
 void AP_Follow::init_offsets_if_required()
 {
+    // return immediately if offsets are managed externally
+    if (_offsets_managed) {
+        return;
+    }
+
     // return immediately if offsets have already been set
     if (!_offset_m.get().is_zero()) {
         return;
@@ -865,6 +870,11 @@ Vector3f AP_Follow::rotate_vector(const Vector3f &vec, float angle_deg) const
 // Resets follow mode offsets to zero if they were automatically initialized.
 void AP_Follow::clear_offsets_if_required()
 {
+    // do nothing if offsets are managed externally
+    if (_offsets_managed) {
+        return;
+    }
+
     if (_offsets_were_zero) {
         _offset_m.set(Vector3f());
         _offsets_were_zero = false;

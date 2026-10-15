@@ -73,6 +73,17 @@ public:
     // Resets the follow mode offsets to zero if they were automatically initialized. Should be called when exiting Follow mode.
     void clear_offsets_if_required();
 
+    // set true when the follow offsets are managed externally (e.g. the Copter
+    // follower FSM); prevents automatic initialisation and clearing of offsets
+    void set_offsets_managed(bool managed) { _offsets_managed = managed; }
+
+    // set the follow offset directly (m). With FOLL_OFS_TYPE=1 the X axis is along
+    // the lead vehicle's heading, so a negative X trails behind it
+    void set_offset_m(const Vector3f &offset_m) { _offset_m.set(offset_m); }
+
+    // get the current follow offset (m)
+    Vector3f get_offset_m() const { return _offset_m.get(); }
+
     //==========================================================================
     // Target Estimation and Tracking Methods
     //==========================================================================
@@ -245,6 +256,7 @@ private:
     float       _dist_to_target_m;              // Horizontal distance to target, for reporting (meters)
     float       _bearing_to_target_deg;         // Bearing to target from vehicle (degrees, 0 = North)
     bool        _offsets_were_zero;             // True if initial offset was zero before being initialized
+    bool        _offsets_managed;               // True when offsets are managed externally and must not be auto-initialised or cleared
     bool        _using_follow_target;           // True if FOLLOW_TARGET messages are being used instead of GLOBAL_POSITION_INT
 
     HAL_Semaphore   _follow_sem;                // semaphore for multi-thread use of update_estimates and LUA calls
