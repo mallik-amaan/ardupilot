@@ -41,6 +41,10 @@ const AP_Param::GroupInfo FollowerFsm::var_info[] = {
 // depending on whether the vehicle is on the ground
 void FollowerFsm::enter()
 {
+    // a fresh mode entry drops any engagement not yet acted on
+    _launch_requested = false;
+    _pending_valid = false;
+
     // capture the configured gap; FOLL_OFS_X is negative behind the target
     // when FOLL_OFS_TYPE=1 (lead-relative offsets)
     const float configured_gap_m = -copter.g2.follow.get_offset_m().x;
@@ -67,6 +71,7 @@ void FollowerFsm::enter()
 // start the interceptor launch toward the target's altitude
 void FollowerFsm::enter_launching()
 {
+    _launch_requested = false;
     set_phase(FollowerPhase::LAUNCHING);
 }
 
@@ -90,6 +95,16 @@ void FollowerFsm::enter_follow()
 
     // restore the default horizontal speed in case an approach sped up
     copter.flightmode->set_speed_NE_ms(copter.wp_nav->get_default_speed_NE_ms());
+
+    // apply an engagement requested while on the ground or during the launch
+    if (_pending_valid) {
+        set_gap(_pending_gap_m);
+        if (is_positive(_pending_speed_ms)) {
+            copter.flightmode->set_speed_NE_ms(_pending_speed_ms);
+        }
+        set_phase(_pending_phase);
+        _pending_valid = false;
+    }
 }
 
 // left Follow mode; re-entering Follow restarts the engagement
@@ -104,32 +119,73 @@ bool FollowerFsm::handle_user_command(uint8_t request, float x_m, float speed_ms
 {
     switch (request) {
     case 1:     // FOLLOW: (re-)enter Follow mode / resume the safe gap
-        if (copter.flightmode->mode_number() != Mode::Number::FOLLOW) {
-            return copter.set_mode(Mode::Number::FOLLOW, ModeReason::GCS_COMMAND);
+        if (!copter.motors->armed()) {
+            return false;               // prepare the follower first
         }
-        enter_follow();
+        _launch_requested = false;
+        _pending_valid = false;
+        if (copter.flightmode->mode_number() != Mode::Number::FOLLOW) {
+            if (!copter.set_mode(Mode::Number::FOLLOW, ModeReason::GCS_COMMAND)) {
+                return false;
+            }
+        }
+        if (_phase == FollowerPhase::LAUNCHING) {
+            return true;                // let the launch finish; plain gap after
+        }
+        if (!copter.ap.land_complete) {
+            enter_follow();             // airborne: (re-)hold the safe gap
+            return true;
+        }
+        // on the ground: resume the normal trigger watch instead of sitting
+        // in FOLLOW, which would skip the launch sequence
+        if (_phase != FollowerPhase::WAITING) {
+            set_phase(FollowerPhase::WAITING);
+        }
         return true;
 
     case 2:     // APPROACH: close the gap by X
-    case 3:     // COLLIDE: fly through the lead vehicle's position
-        if (copter.flightmode->mode_number() != Mode::Number::FOLLOW || !_active) {
-            // only meaningful once launched and following
+    case 3: {   // COLLIDE: fly through the lead vehicle's position
+        const FollowerPhase phase = (request == 2) ? FollowerPhase::APPROACH
+                                                   : FollowerPhase::COLLIDE;
+        const float gap_m = (request == 2) ? MAX(_safe_gap_m - MAX(x_m, 0.0f), 0.0f)
+                                           : 0.0f;
+
+        if (copter.flightmode->mode_number() != Mode::Number::FOLLOW) {
+            // engage from another mode (e.g. LOITER after a dismiss);
+            // enter() picks FOLLOW in the air or WAITING on the ground
+            if (!copter.set_mode(Mode::Number::FOLLOW, ModeReason::GCS_COMMAND)) {
+                return false;
+            }
+        }
+
+        if (_phase == FollowerPhase::LAUNCHING) {
+            // apply when the launch completes (enter_follow)
+            set_pending(phase, gap_m, speed_ms);
+            return true;
+        }
+        if (copter.motors->armed() && !copter.ap.land_complete) {
+            // airborne and following: apply immediately
+            set_gap(gap_m);
+            set_phase(phase);
+            if (is_positive(speed_ms)) {
+                copter.flightmode->set_speed_NE_ms(speed_ms);
+            }
+            return true;
+        }
+        if (!copter.motors->armed()) {
+            // on the ground and not armed: prepare the follower first
             return false;
         }
-        if (request == 2) {
-            set_gap(MAX(_safe_gap_m - MAX(x_m, 0.0f), 0.0f));
-            set_phase(FollowerPhase::APPROACH);
-        } else {
-            set_gap(0.0f);
-            set_phase(FollowerPhase::COLLIDE);
-        }
-        if (is_positive(speed_ms)) {
-            // speed up the closure; 0 keeps the current speed
-            copter.flightmode->set_speed_NE_ms(speed_ms);
-        }
+        // on the ground: request the launch; the WAITING update starts it as
+        // soon as target data is available (the trigger radius is bypassed)
+        set_pending(phase, gap_m, speed_ms);
+        _launch_requested = true;
         return true;
+    }
 
     case 4:     // DISMISS: leave Follow mode and hover
+        _launch_requested = false;
+        _pending_valid = false;
         if (copter.flightmode->mode_number() != Mode::Number::FOLLOW) {
             return false;
         }
@@ -165,6 +221,15 @@ void FollowerFsm::set_phase(FollowerPhase phase)
     announce();
 }
 
+// remember an engagement to apply when the launch completes
+void FollowerFsm::set_pending(FollowerPhase phase, float gap_m, float speed_ms)
+{
+    _pending_phase = phase;
+    _pending_gap_m = gap_m;
+    _pending_speed_ms = speed_ms;
+    _pending_valid = true;
+}
+
 // announce the current phase to the GCS; the server/UI parse "FLWR_STATE "
 void FollowerFsm::announce()
 {
@@ -184,7 +249,7 @@ bool ModeFollow::follower_update()
         // hold safely on the ground while watching for the lead vehicle
         make_safe_ground_handling();
 
-        if (!fsm.trigger_enabled() || !motors->armed() || !copter.ap.land_complete) {
+        if (!motors->armed() || !copter.ap.land_complete) {
             return true;
         }
         if (!g2.follow.have_target()) {
@@ -195,7 +260,12 @@ bool ModeFollow::follower_update()
         if (!g2.follow.get_target_location_and_velocity(target_loc, target_vel_ned_ms)) {
             return true;
         }
-        if (copter.current_loc.get_distance(target_loc) > fsm.trigger_dist_m()) {
+        // an explicit APPROACH/COLLIDE request launches without waiting for
+        // the trigger radius (target data is still required for yaw/altitude)
+        const bool manual_launch = fsm.launch_requested();
+        if (!manual_launch &&
+            (!fsm.trigger_enabled() ||
+             copter.current_loc.get_distance(target_loc) > fsm.trigger_dist_m())) {
             return true;
         }
 

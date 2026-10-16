@@ -21,6 +21,11 @@
  *   COLLIDE    tracking the lead vehicle's position (gap = 0)
  *   DISMISSED  left Follow mode (LOITER); re-entering Follow restarts
  *
+ * APPROACH and COLLIDE are accepted in any state: airborne in FOLLOW they
+ * apply immediately, during LAUNCHING or on the ground they are held as a
+ * pending engagement (a ground request starts the launch as soon as target
+ * data is available), and from LOITER the request re-enters Follow first.
+ *
  * ---------------------------------------------------------------------
  * Copy/port notes - this file (together with ArduCopter/follower_fsm.cpp)
  * is designed to be lifted into another codebase.  It depends on:
@@ -56,6 +61,9 @@
  *           max(safe gap - X, 0)), or the new gap for SET_GAP
  *   param3: horizontal speed for APPROACH / COLLIDE in m/s
  *           (0 = unchanged); FOLLOW restores the default WP speed
+ *
+ * APPROACH / COLLIDE return FAILED when the follower cannot engage (not
+ * armed on the ground, or the mode cannot be entered).
  */
 
 // engagement state machine phases
@@ -87,6 +95,9 @@ public:
     bool trigger_enabled() const { return _trig_dist_m > 0.0f; }
     float trigger_dist_m() const { return _trig_dist_m; }
 
+    // true while a GCS engagement request is waiting to start the launch
+    bool launch_requested() const { return _launch_requested; }
+
     FollowerPhase phase() const { return _phase; }
     bool launched() const { return _active; }
 
@@ -104,10 +115,20 @@ private:
     // select a phase and announce it
     void set_phase(FollowerPhase phase);
 
+    // remember an engagement to apply when the launch completes
+    void set_pending(FollowerPhase phase, float gap_m, float speed_ms);
+
     AP_Float _trig_dist_m;      // FLWR_TRIG_DIST: launch trigger radius (m), 0 = disabled
 
     FollowerPhase _phase;       // current state
     float _safe_gap_m;          // gap to hold in FOLLOW; target of RESUME
     bool _safe_gap_valid;       // true once _safe_gap_m has been captured
-    bool _active;               // true once launched / engaged (allows APPROACH & COLLIDE)
+    bool _active;               // true once launched / engaged
+
+    // engagement requested before the launch could start (WAITING/LAUNCHING)
+    bool _launch_requested;     // start the launch without the trigger radius
+    bool _pending_valid;        // true while a pending engagement is held
+    FollowerPhase _pending_phase;
+    float _pending_gap_m;
+    float _pending_speed_ms;
 };
