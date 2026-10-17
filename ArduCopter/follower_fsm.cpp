@@ -281,7 +281,8 @@ bool ModeFollow::follower_update()
         g2.follow.init_offsets_if_required();
 
         // point the launch-pitch thrust vector at the lead vehicle
-        auto_yaw.set_fixed_yaw_rad(radians(copter.current_loc.get_bearing_to(target_loc)), 0.0f, 1, false);
+        // (get_bearing_to returns centi-degrees)
+        auto_yaw.set_fixed_yaw_rad(radians(copter.current_loc.get_bearing_to(target_loc) * 0.01f), 0.0f, 1, false);
 
         if (copter.g2.launch_pitch_enable) {
             copter.launch_sm.start();
@@ -295,6 +296,18 @@ bool ModeFollow::follower_update()
     }
 
     case FollowerPhase::LAUNCHING: {
+        // keep the launch-pitch thrust vector pointed at the lead vehicle
+        // while the launch pitch is still being acquired; the lead may
+        // maneuver during those few seconds and a single yaw command at
+        // trigger would leave the interceptor committed to a stale heading
+        if (copter.g2.launch_pitch_enable && !copter.launch_sm.is_pitch_reached()) {
+            Location target_loc;
+            Vector3f target_vel_ned_ms;
+            if (g2.follow.get_target_location_and_velocity(target_loc, target_vel_ned_ms)) {
+                auto_yaw.set_fixed_yaw_rad(radians(copter.current_loc.get_bearing_to(target_loc) * 0.01f), 0.0f, 0, false);
+            }
+        }
+
         // run the interceptor launch; the state machine flies the vehicle
         // until the launch altitude is reached
         copter.launch_sm.update();
