@@ -36,6 +36,7 @@ bool ModeFollow::init(const bool ignore_checks)
 #endif
 
     // initialise horizontal speed, acceleration
+    _speed_cap_ms = 0.0f;   // no engagement speed cap on mode entry
     pos_control->NE_set_max_speed_accel_m(wp_nav->get_default_speed_NE_ms(), wp_nav->get_wp_acceleration_mss());
     pos_control->NE_set_correction_speed_accel_m(wp_nav->get_default_speed_NE_ms(), wp_nav->get_wp_acceleration_mss());
 
@@ -63,6 +64,20 @@ bool ModeFollow::init(const bool ignore_checks)
 void ModeFollow::exit()
 {
     g2.follow.clear_offsets_if_required();
+}
+
+// cap the horizontal speed used by the follow position controller; the
+// follower state machine uses this for per-engagement speed control
+bool ModeFollow::set_speed_NE_ms(float speed_ne_ms)
+{
+    // a value at or above the wp_nav default clears the cap so the follow
+    // controller can sprint above the default speed to close on the lead
+    const float default_ms = wp_nav->get_default_speed_NE_ms();
+    _speed_cap_ms = (is_positive(speed_ne_ms) && speed_ne_ms < default_ms) ? speed_ne_ms : 0.0f;
+    const float cap_ms = is_positive(_speed_cap_ms) ? _speed_cap_ms : default_ms;
+    pos_control->NE_set_max_speed_accel_m(cap_ms, wp_nav->get_wp_acceleration_mss());
+    pos_control->NE_set_correction_speed_accel_m(cap_ms, wp_nav->get_wp_acceleration_mss());
+    return true;
 }
 
 void ModeFollow::run()
@@ -102,7 +117,12 @@ void ModeFollow::run()
         g2.follow.get_target_heading_deg(target_heading_deg);
         g2.follow.get_target_heading_rate_degs(target_heading_rate_degs);
 
-        pos_control->input_pos_vel_accel_NE_m(pos_ofs_ned_m.xy(), vel_ofs_ned_ms.xy(), accel_ofs_ned_mss.xy(), false);
+        // limit the full command (feedforward + correction) when an explicit
+        // engagement speed cap is active, so the follower holds the requested
+        // speed even with a large gap error; uncapped otherwise so it can
+        // sprint above the default speed to close on the lead vehicle
+        pos_control->input_pos_vel_accel_NE_m(pos_ofs_ned_m.xy(), vel_ofs_ned_ms.xy(), accel_ofs_ned_mss.xy(),
+                                              is_positive(_speed_cap_ms));
 
         float pos_ofs_d_m = pos_ofs_ned_m.z;
         pos_control->input_pos_vel_accel_D_m(pos_ofs_d_m, vel_ofs_ned_ms.z, accel_ofs_ned_mss.z, false);

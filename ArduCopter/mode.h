@@ -2026,6 +2026,12 @@ public:
     bool follower_update();
 #endif
 
+    // cap the horizontal speed used by the follow position controller; the
+    // follower state machine uses this for per-engagement speed control
+    // (a value at or above the default clears the cap and restores the
+    // sprint-to-target behaviour)
+    bool set_speed_NE_ms(float speed_ne_ms) override;
+
 protected:
 
     const char *name() const override { return "Follow"; }
@@ -2037,6 +2043,10 @@ protected:
     float wp_bearing_deg() const override;
 
     uint32_t last_log_ms;   // system time of last time desired velocity was logging
+
+    // explicit horizontal speed cap from set_speed_NE_ms(); zero when no cap
+    // is active (the follow controller may sprint above the default speed)
+    float _speed_cap_ms;
 };
 #endif
 
