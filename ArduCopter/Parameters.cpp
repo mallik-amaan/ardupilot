@@ -1230,6 +1230,22 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     // @User: Standard
     AP_GROUPINFO("LAUNCH_PITCH_SEC", 28, ParametersG2, launch_pitch_time, 3.0f),
 
+    // @Param: LAUNCH_YAW_TOL
+    // @DisplayName: Launch yaw alignment tolerance
+    // @Description: Yaw error tolerance for the launch heading alignment phase. The launch pitch is not commanded until yaw is within this tolerance of the launch heading (or LAUNCH_YAW_SEC elapses), so the angled-pitch thrust vector points at the target from liftoff.
+    // @Units: deg
+    // @Range: 1.0 45.0
+    // @User: Standard
+    AP_GROUPINFO("LAUNCH_YAW_TOL", 47, ParametersG2, launch_yaw_tol, 10.0f),
+
+    // @Param: LAUNCH_YAW_SEC
+    // @DisplayName: Launch yaw alignment timeout
+    // @Description: Maximum time in seconds to wait for yaw alignment before commanding the launch pitch anyway
+    // @Units: s
+    // @Range: 0.0 30.0
+    // @User: Standard
+    AP_GROUPINFO("LAUNCH_YAW_SEC", 60, ParametersG2, launch_yaw_time, 8.0f),
+
     // @Param: WP_CONV_DIST
     // @DisplayName: Waypoint convergence trigger distance
     // @Description: Horizontal distance to waypoint (D) below which vertical descent begins

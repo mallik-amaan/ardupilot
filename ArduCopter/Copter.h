@@ -1140,12 +1140,13 @@ public:
         enum class State : uint8_t {
             IDLE = 0,
             LAUNCH_TAKEOFF = 1,
-            PITCH_ACQUISITION = 2,
-            PITCH_REACHED = 3,
-            TRANSIT_TO_WP = 4,
-            ALT_CONVERGENCE = 5,
-            ALT_HOLD = 6,
-            NORMAL_NAVIGATION = 7,
+            YAW_ALIGN = 2,
+            PITCH_ACQUISITION = 3,
+            PITCH_REACHED = 4,
+            TRANSIT_TO_WP = 5,
+            ALT_CONVERGENCE = 6,
+            ALT_HOLD = 7,
+            NORMAL_NAVIGATION = 8,
         };
 
         void reset();
@@ -1153,6 +1154,7 @@ public:
         bool update();
         void update_wp_navigation(float wp_dist_m, int32_t current_alt_cm, int32_t wp_alt_cm);
         bool is_pitch_reached() const { return state >= State::PITCH_REACHED; }
+        bool is_yaw_aligning() const { return state == State::YAW_ALIGN; }
         bool is_in_alt_convergence() const { return state == State::ALT_CONVERGENCE; }
         bool is_in_alt_hold() const { return state == State::ALT_HOLD; }
         // true from the start of waypoint transit until altitude hold is captured
@@ -1164,6 +1166,7 @@ public:
     private:
         State state = State::IDLE;
         uint32_t stability_start_ms = 0;
+        uint32_t yaw_align_start_ms = 0;
         uint32_t last_debug_ms = 0;
         bool timer_active = false;
         bool latched = false;

@@ -217,8 +217,12 @@ void _AutoTakeoff::run()
 
     // call attitude controller with auto yaw
     if (copter.g2.launch_pitch_enable && !copter.launch_sm.is_pitch_reached()) {
+        // stay level during the yaw-alignment phase so the vehicle can rotate
+        // freely; command the launch pitch only once yaw is aligned
+        const float launch_pitch_deg = copter.launch_sm.is_yaw_aligning() ? 0.0f
+                                                                          : copter.g2.launch_pitch.get();
         const float angle_limit_rad = attitude_control->lean_angle_max_rad();
-        const float target_pitch_rad = constrain_float(radians(copter.g2.launch_pitch.get()), -angle_limit_rad, angle_limit_rad);
+        const float target_pitch_rad = constrain_float(radians(launch_pitch_deg), -angle_limit_rad, angle_limit_rad);
         attitude_control->input_euler_angle_roll_pitch_yaw_rad(0.0f, target_pitch_rad, copter.flightmode->auto_yaw.get_heading().yaw_angle_rad, true);
     } else {
         attitude_control->input_thrust_vector_heading(pos_control->get_thrust_vector(), copter.flightmode->auto_yaw.get_heading());
@@ -285,6 +289,7 @@ void Copter::LaunchStateMachine::reset()
 {
     state = State::IDLE;
     stability_start_ms = 0;
+    yaw_align_start_ms = 0;
     last_debug_ms = 0;
     timer_active = false;
     latched = false;
@@ -294,6 +299,7 @@ void Copter::LaunchStateMachine::start()
 {
     state = State::LAUNCH_TAKEOFF;
     stability_start_ms = 0;
+    yaw_align_start_ms = 0;
     last_debug_ms = 0;
     timer_active = false;
     latched = false;
@@ -312,11 +318,36 @@ bool Copter::LaunchStateMachine::update()
 
     if (state == State::IDLE || state == State::LAUNCH_TAKEOFF) {
         if (!copter.ap.land_complete) {
+            state = State::YAW_ALIGN;
+            yaw_align_start_ms = now_ms;
+            copter.gcs().send_text(MAV_SEVERITY_INFO, "Launch: Airborne, aligning yaw to launch heading");
+        } else {
+            return false;
+        }
+    }
+
+    if (state == State::YAW_ALIGN) {
+        // hold level attitude while yaw converges on the launch heading so the
+        // angled-pitch thrust vector already points at the target when the
+        // pitch is commanded; a timeout guarantees the launch is never blocked
+        const float tol_rad = radians(MAX(1.0f, copter.g2.launch_yaw_tol.get()));
+        const float timeout_ms = MAX(0.0f, copter.g2.launch_yaw_time.get()) * 1000.0f;
+        const float yaw_err_rad = fabsf(wrap_PI(copter.ahrs.get_yaw_rad() -
+                                                copter.flightmode->auto_yaw.get_heading().yaw_angle_rad));
+        if (yaw_err_rad <= tol_rad ||
+            (timeout_ms > 0.0f && (now_ms - yaw_align_start_ms) >= (uint32_t)timeout_ms)) {
             state = State::PITCH_ACQUISITION;
             const float target_pitch_deg = copter.g2.launch_pitch.get();
-            copter.gcs().send_text(MAV_SEVERITY_INFO, "Launch: Airborne, acquiring pitch %.1f deg",
-                                   (double)target_pitch_deg);
+            copter.gcs().send_text(MAV_SEVERITY_INFO, "Launch: Yaw aligned (err %.1f deg), acquiring pitch %.1f deg",
+                                   (double)degrees(yaw_err_rad), (double)target_pitch_deg);
         } else {
+            // 1 Hz debug while waiting
+            if (now_ms - last_debug_ms >= 1000) {
+                last_debug_ms = now_ms;
+                copter.gcs().send_text(MAV_SEVERITY_DEBUG, "Launch: yaw err=%.1f tol=%.1f t=%u/%ums aligned=NO",
+                                       (double)degrees(yaw_err_rad), (double)degrees(tol_rad),
+                                       (unsigned)(now_ms - yaw_align_start_ms), (unsigned)timeout_ms);
+            }
             return false;
         }
     }

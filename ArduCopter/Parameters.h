@@ -757,6 +757,8 @@ public:
     AP_Float        launch_pitch;        // LAUNCH_PITCH
     AP_Float        launch_pitch_tol;    // LAUNCH_PITCH_TOL
     AP_Float        launch_pitch_time;   // LAUNCH_PITCH_SEC
+    AP_Float        launch_yaw_tol;      // LAUNCH_YAW_TOL
+    AP_Float        launch_yaw_time;     // LAUNCH_YAW_SEC
     AP_Float        wp_conv_dist;        // WP_CONV_DIST
     AP_Float        wp_conv_tol;         // WP_CONV_TOL
 
