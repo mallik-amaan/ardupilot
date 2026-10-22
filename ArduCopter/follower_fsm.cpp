@@ -167,9 +167,11 @@ bool FollowerFsm::handle_user_command(uint8_t request, float x_m, float speed_ms
             // airborne and following: apply immediately
             set_gap(gap_m);
             set_phase(phase);
-            if (is_positive(speed_ms)) {
-                copter.flightmode->set_speed_NE_ms(speed_ms);
-            }
+            // an engagement request fully specifies the speed: no speed
+            // clears any earlier per-engagement cap so a stale slow value
+            // (e.g. from a gentle approach) cannot limit a later collide
+            copter.flightmode->set_speed_NE_ms(is_positive(speed_ms) ? speed_ms :
+                                                copter.wp_nav->get_default_speed_NE_ms());
             return true;
         }
         if (!copter.motors->armed()) {
